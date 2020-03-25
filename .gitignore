@@ -1,0 +1,6 @@
+/__pycache__
+/venv
+/ldap_create_test.py
+/ldap_delete_test.py
+/ldap_test.py
+/.idea
