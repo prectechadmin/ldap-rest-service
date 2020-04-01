@@ -4,7 +4,7 @@ from Crypto.Random import get_random_bytes
 class Config(object):
     DEBUG = False
     TESTING = False
-    DATABASE_URI = 'sqlite:///:memory:'
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     LDAP_URI = os.environ.get('LDAP_URI',"")
     LDAP_BINDDN = os.environ.get('LDAP_BINDDN',"") # the manger
     LDAP_SECRET = os.environ.get('LDAP_SECRET',"")
@@ -13,13 +13,15 @@ class Config(object):
     ENCRYPT_KEY = os.environ.get('ENCRYPT_KEY',"")
     AUTH_TOKEN = os.environ.get('AUTH_TOKEN',"")
     OVIRT_ENGINE_URL =  os.environ.get('OVIRT_ENGINE_URL',"")
+    OVIRT_ADMIN_USER = os.environ.get('OVIRT_ADMIN_USER',"")
+    OVIRT_ADMIN_PASSWORD = os.environ.get('OVIRT_ADMIN_PASSWORD',"")
+    OVIRT_CERT_PATH = os.environ.get('OVIRT_CERT_PATH',"")
+    API_SECRET_KEY = os.environ.get('API_SECRET_KEY',"")
 
 
 class ProductionConfig(Config):
-    pass
-    #DATABASE_URI = f"mysql+pymysql://" \
-    #               f"{os.environ['MYSQL_USER']}:{os.environ['MYSQL_PASS']}@" \
-    #               f"{os.environ['MYSQL_HOST']}/{os.environ['MYSQL_DATABASE']}"
+
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URI',"")
 
 class DevelopmentConfig(Config):
     DEBUG = True
@@ -31,6 +33,8 @@ class DevelopmentConfig(Config):
     ENCRYPT_KEY = "1757373ef871ebc9dc48e79831816ea7"
     AUTH_TOKEN = "dlkfd-lfkd"
     OVIRT_ENGINE_URL = "https://ovirt-mngnt01.rdng.uk.cloudxtiny.com/ovirt-engine"
+    OVIRT_ADMIN_USER = ""
+    OVIRT_ADMIN_PASSWORD = ""
 
 class TestingConfig(Config):
     TESTING = True
