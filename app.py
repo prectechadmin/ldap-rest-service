@@ -158,6 +158,9 @@ def delete_ovirt_user_from_ldap(uidBase64Hash):
 
         # delete from ovirt server
         OvirtEngineService().deleteUserAccount(aclient.ovirt_user_id)
+        aclient.acive = False
+        # set user as inactive
+        db.session.save(aclient)
 
         res = jsonify({"status":"success", "message":"User deleted"})
         res.headers["content-type"] = "application/json"

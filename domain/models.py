@@ -61,6 +61,7 @@ class User(db.Model):
     ovirt_auth_domain = db.Column(db.String(120), unique=True, nullable=False)
     encrypted_ovirt_auth_hash = db.Column(db.BLOB, unique=True, nullable=True)
     encrypted_ovirt_auth_iv = db.Column(db.BLOB, unique=True, nullable=True)
+    active = db.Column(db.Boolean, default=True, nullable=False)
     created = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
