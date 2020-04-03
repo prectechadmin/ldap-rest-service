@@ -1,6 +1,7 @@
-from flask import Flask, request, abort, Response,jsonify, g
+from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 import sys,traceback,json
+import ldap
 from flask_python_ldap import LDAP
 from base64 import urlsafe_b64decode
 from service.ldap_service import LdapUser, LdapGroup
@@ -10,8 +11,8 @@ from base64 import urlsafe_b64encode
 from flask_httpauth import HTTPBasicAuth, HTTPTokenAuth, MultiAuth
 
 basic_auth = HTTPBasicAuth()
-token_auth = HTTPTokenAuth('Bearer')
-multi_auth = MultiAuth(basic_auth, token_auth)
+#token_auth = HTTPTokenAuth('Bearer')
+#multi_auth = MultiAuth(basic_auth, token_auth)
 
 application = Flask(__name__)
 application.config.from_object(ProductionConfig())
@@ -24,21 +25,25 @@ db = SQLAlchemy(application)
 from domain.models import ApiUser, User
 
 @basic_auth.verify_password
-def verify_password(username, password):
-    user = ApiUser.query.filter_by(username = username).first()
-    if not user or not user.verify_password(password):
-        return False
+def verify_password(username_or_token, password):
+    # first try to authenticate by token
+    user = ApiUser.verify_auth_token(username_or_token)
+    if not user:
+        # try to authenticate with username/password
+        user = ApiUser.query.filter_by(username = username_or_token).first()
+        if not user or not user.verify_password(password):
+            return False
     g.user = user
     return True
 
-@token_auth.verify_password
-def verify_password(token):
-    # first try to authenticate by token
-    user = ApiUser.verify_auth_token(token)
-    if not user:
-        return False
-    g.user = user
-    return True
+#@token_auth.verify_token
+#def verify_token(token):
+#    # first try to authenticate by token
+#    user = ApiUser.verify_auth_token(token)
+#    if not user:
+#        return False
+#    g.user = user
+#    return True
 
 
 @application.route('/')
@@ -52,14 +57,13 @@ def get_auth_token():
     return jsonify({ 'token': token.decode('ascii') })
 
 @application.route('/group/add/user', methods=['POST'])
-@multi_auth.login_required
+@basic_auth.login_required
 def add_user_to_ldap_group():
     user_data = request.get_json()
     user_group = LdapGroup.set_basedn(
         application.config['LDAP_AUTH_GROUP_BASEDN']
     ).query.filter(f"(cn={user_data['group_name']})").first()
     user_group.members = user_data["userid"]
-    print(user_group)
     add_group_msg = user_group.save()
     if (add_group_msg):
         res = jsonify({'status': "success", 'message': "User added to group"})
@@ -70,10 +74,37 @@ def add_user_to_ldap_group():
         res.headers["content-type"] = "application/json"
         return res, 503
 
+@application.route('/group/delete/user/<uidBase64Hash>')
+@basic_auth.login_required
+def delete_user_from_ldap_group(uidBase64Hash):
+    ldap_userid, ldap_group = urlsafe_b64decode(uidBase64Hash).decode('utf-8').split("|")
+    user_group = LdapGroup.set_basedn(
+        application.config['LDAP_AUTH_GROUP_BASEDN']
+    ).query.filter(f"(cn={ldap_group})").first()
+
+    if not user_group:
+        raise RuntimeError(f"Group {ldap_group} doesn't exist")
+
+    # delete user from group ldap
+    add_group_msg = application.extensions['ldap'].connection.modify_s(
+        f"cn={ldap_group},{application.config['LDAP_AUTH_GROUP_BASEDN']}"
+        , [(ldap.MOD_DELETE, 'memberUid',[ldap_userid.encode()])] )
+
+    if (add_group_msg):
+        res = jsonify({'status': "success", 'message': "User deleted from group"})
+        res.headers["content-type"] = "application/json"
+        return res, 201
+    else:
+        res = jsonify({'status': "error", 'message': f"Error. Failed to delete user {ldap_userid} from group {ldap_group} "})
+        res.headers["content-type"] = "application/json"
+        return res, 503
+
 @application.route('/user/add', methods=['POST'])
-@multi_auth.login_required
+@basic_auth.login_required
 def add_ovirt_user_to_ldap():
     user_data = request.get_json()
+    if user_data == None:
+        raise RuntimeError("Invalid user data")
     user_auth_domain = user_data.pop("user_auth_domain")
     user_data["dn"] = f"uid={user_data['username']}-{user_data['userid']},{application.config['LDAP_AUTH_BASEDN']}"
     user_data["base_dn"] = application.config["LDAP_AUTH_BASEDN"]
@@ -119,6 +150,7 @@ def add_ovirt_user_to_ldap():
             ).id
 
             db.session.add(newClient)
+            db.session.commit()
             result = json.dumps({
                 'java_ciphertext': urlsafe_b64encode(
                     encrypted_data["iv"] + encrypted_data["ct_bytes"] + "|" + user_auth_domain
@@ -136,31 +168,44 @@ def add_ovirt_user_to_ldap():
         return res, 503
 
 @application.route('/user/delete/<uidBase64Hash>')
-@multi_auth.login_required
+@basic_auth.login_required
 def delete_ovirt_user_from_ldap(uidBase64Hash):
     ldap_userid, billing_id = urlsafe_b64decode(uidBase64Hash).decode('utf-8').split("|")
     # get User from database
-    aclient = User.filter(User.billing_id == billing_id).first()
+    aclient = User.query.filter_by(billing_id= billing_id).first()
 
     # delete from LDAP
-    del_user_msg = LdapUser.set_basedn(
+    ldap_user = LdapUser.set_basedn(
         application.config['LDAP_AUTH_BASEDN']
-    ).query.filter(f"(uid={ldap_userid})").first().delete()
+    ).query.filter(f"(uid={ldap_userid})").first()
+
+    if not ldap_user:
+        raise RuntimeError("Error User doesn't exist")
+
+    del_user_msg = ldap_user.delete()
 
     if (del_user_msg == True):
+
+        # delete user from group ldap
+        add_group_msg = application.extensions['ldap'].connection.modify_s(
+            f"cn={aclient.ldap_group_name},{application.config['LDAP_AUTH_GROUP_BASEDN']}"
+            , [(ldap.MOD_DELETE, 'memberUid', [ aclient.username.encode()])])
+
         # remove user from the group.
-        user_group = LdapGroup.set_basedn(
-            application.config['LDAP_AUTH_GROUP_BASEDN']
-        ).query.filter(f"(cn={aclient.ldap_group_name})").first()
-        new_group_members = [amember for amember in user_group.members if amember != aclient.username]
-        user_group.members = new_group_members
-        user_group.save()
+        #user_group = LdapGroup.set_basedn(
+        #    application.config['LDAP_AUTH_GROUP_BASEDN']
+        #).query.filter(f"(cn={aclient.ldap_group_name})").first()
+        #new_group_members = [amember for amember in user_group.members if amember != aclient.username]
+        #user_group.members = new_group_members
+        #user_group.save()
 
         # delete from ovirt server
         OvirtEngineService().deleteUserAccount(aclient.ovirt_user_id)
         aclient.acive = False
+
         # set user as inactive
-        db.session.save(aclient)
+        db.session.add(aclient)
+        db.session.commit()
 
         res = jsonify({"status":"success", "message":"User deleted"})
         res.headers["content-type"] = "application/json"
@@ -169,7 +214,7 @@ def delete_ovirt_user_from_ldap(uidBase64Hash):
         return {'error': 503, 'message': f"Failed to delete user failed: {del_user_msg}"}, 503
 
 @application.route('/group/add', methods=['POST'])
-@multi_auth.login_required
+@basic_auth.login_required
 def add_group_to_ldap():
     # Add to LDAP
     group_data = request.get_json()
@@ -186,7 +231,7 @@ def add_group_to_ldap():
         return res, 503
 
 @application.route('/group/delete/<uidBase64Hash>')
-@multi_auth.login_required
+@basic_auth.login_required
 def delete_group_from_ldap(uidBase64Hash):
     print(uidBase64Hash)
     ldap_groupname = urlsafe_b64decode(uidBase64Hash).decode('utf-8')
@@ -215,13 +260,25 @@ def handle_exceptions(e):
     print('-' * 60)
     return res, 500
 
-@multi_auth.error_handler
+@basic_auth.error_handler
+def unauthorised_user_basic_auth():
+    return unauthorised_user()
+
+#@token_auth.error_handler
+#def unauthorised_user_token_auth():
+#    return unauthorised_user()
+
 def unauthorised_user():
-    failed_response = jsonify({"status":"error","message":"Your are not authorised to use this services."})
+    failed_response = jsonify({"status": "error", "message": "Your are not authorised to use this services."})
     failed_response.status_code = 401
     failed_response.headers['content-type'] = "application/json"
     return failed_response
 
+def create_admin_api_user():
+    admin = ApiUser(username="admin")
+    admin.hash_password(application.config['API_ADMIN_PASSWORD'])
+    db.session.add(admin)
+    db.session.commit()
 
 if __name__ == '__main__':
     application.run()

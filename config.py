@@ -1,10 +1,10 @@
 import os
-from Crypto.Random import get_random_bytes
 
 class Config(object):
     DEBUG = False
     TESTING = False
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
     LDAP_URI = os.environ.get('LDAP_URI',"")
     LDAP_BINDDN = os.environ.get('LDAP_BINDDN',"") # the manger
     LDAP_SECRET = os.environ.get('LDAP_SECRET',"")
@@ -15,13 +15,14 @@ class Config(object):
     OVIRT_ENGINE_URL =  os.environ.get('OVIRT_ENGINE_URL',"")
     OVIRT_ADMIN_USER = os.environ.get('OVIRT_ADMIN_USER',"")
     OVIRT_ADMIN_PASSWORD = os.environ.get('OVIRT_ADMIN_PASSWORD',"")
-    OVIRT_CERT_PATH = os.environ.get('OVIRT_CERT_PATH',"")
+    OVIRT_CERT_PATH = os.environ.get('OVIRT_CERT_PATH',"/www/ovirt-ca.cer")
     API_SECRET_KEY = os.environ.get('API_SECRET_KEY',"")
+    API_ADMIN_PASSWORD = os.environ.get('API_ADMIN_PASSWORD',"")
 
 
 class ProductionConfig(Config):
 
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URI',"")
+    SQLALCHEMY_DATABASE_URI = os.environ.get('SQLALCHEMY_DATABASE_URI',"")
 
 class DevelopmentConfig(Config):
     DEBUG = True
