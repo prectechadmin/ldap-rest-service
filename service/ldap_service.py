@@ -1,5 +1,6 @@
 from flask_python_ldap import Entry, Attribute
-
+import ldap
+from flask import current_app
 
 class LdapEntry:
 
@@ -16,6 +17,12 @@ class LdapGroup(Entry,LdapEntry):
     gid = Attribute('gidNumber')
     members = Attribute('memberuid', is_list=True)
 
+    @staticmethod
+    def remove_user(ldap_userid,ldap_group, ldap_group_basedn):
+        current_app.extensions['ldap'].connection.modify_s(
+            f"cn={ldap_group},{ldap_group_basedn}"
+            , [(ldap.MOD_DELETE, 'memberUid', [ldap_userid.encode()])])
+
 
 class LdapUser(Entry,LdapEntry):
 
@@ -31,4 +38,3 @@ class LdapUser(Entry,LdapEntry):
     name = Attribute('cn')
     gid = Attribute('gidNumber')
     home = Attribute('homeDirectory')
-

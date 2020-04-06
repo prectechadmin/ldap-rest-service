@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 import sys,traceback,json
-import ldap
+from datetime import datetime
+import logging
 from flask_python_ldap import LDAP
 from base64 import urlsafe_b64decode
 from service.ldap_service import LdapUser, LdapGroup
@@ -86,40 +87,67 @@ def delete_user_from_ldap_group(uidBase64Hash):
         raise RuntimeError(f"Group {ldap_group} doesn't exist")
 
     # delete user from group ldap
-    add_group_msg = application.extensions['ldap'].connection.modify_s(
-        f"cn={ldap_group},{application.config['LDAP_AUTH_GROUP_BASEDN']}"
-        , [(ldap.MOD_DELETE, 'memberUid',[ldap_userid.encode()])] )
+    add_group_msg = LdapGroup.remove_user(ldap_userid,ldap_group,application.config['LDAP_AUTH_GROUP_BASEDN'])
 
     if (add_group_msg):
-        res = jsonify({'status': "success", 'message': "User deleted from group"})
+        res = jsonify({'status': "success", 'message': f"User deleted from group"})
         res.headers["content-type"] = "application/json"
         return res, 201
     else:
-        res = jsonify({'status': "error", 'message': f"Error. Failed to delete user {ldap_userid} from group {ldap_group} "})
+        res = jsonify({'status': "error"
+                    , 'message': f"Error. Failed to delete user {ldap_userid} from group {ldap_group}"
+                    , "service_error": add_group_msg
+        })
         res.headers["content-type"] = "application/json"
         return res, 503
 
 @application.route('/user/add', methods=['POST'])
 @basic_auth.login_required
-def add_ovirt_user_to_ldap():
+def add_user_to_services():
     user_data = request.get_json()
     if user_data == None:
         raise RuntimeError("Invalid user data")
     user_auth_domain = user_data.pop("user_auth_domain")
     user_data["dn"] = f"uid={user_data['username']}-{user_data['userid']},{application.config['LDAP_AUTH_BASEDN']}"
     user_data["base_dn"] = application.config["LDAP_AUTH_BASEDN"]
+    user_data["name"] = f"{user_data['username']} {user_data['surname']}"
+    user_data["home"] = "/dev/null"
+    if "gid" not in user_data:
+        user_data["gid"] = 1004
+    if "billing_id" not in user_data:
+        user_data["billing_id"] = user_data["userid"]
+    if "group_name" not in user_data:
+        user_data["group_name"] = "Cloudxtiny"
+
     group_name = user_data.pop("group_name")
-    newClient = User(username=user_data['username']
-            , email=user_data['email']
-            , billing_id=user_data["billing_id"]
-            , billing_product_id=user_data["billing_product_id"]
-            , ldap_group_name=group_name
-            , ovirt_auth_domain=user_auth_domain
-         )
-    user_data.pop("billing_id")
+
+    # getOrCreate
+    if User.query.filter_by(email=user_data['email']).scalar() is None:
+        newClient = User(username=user_data['username']
+                , email=user_data['email']
+                , first_name=user_data["firstname"]
+                , last_name=user_data["surname"]
+                , billing_id=user_data["userid"]
+                , billing_product_id=user_data["billing_product_id"]
+                , ldap_group_name=group_name
+                , ovirt_auth_domain=user_auth_domain
+             )
+        db.session.add(newClient)
+    else:
+        newClient =  User.query.filter_by(email=user_data['email']).first()
+        newClient.username=user_data['username']
+        newClient.first_name=user_data["firstname"]
+        newClient.last_name=user_data["surname"]
+        newClient.billing_id=user_data["userid"]
+        newClient.billing_product_id=user_data["billing_product_id"]
+        newClient.ldap_group_name=group_name
+        newClient.ovirt_auth_domain=user_auth_domain
+        newClient.updated = datetime.utcnow
+
     user_data.pop("billing_product_id")
     user = LdapUser(**user_data)
     if (user.save() == True):
+
          # add user to relevant group
         user_group = LdapGroup.set_basedn(
              application.config['LDAP_AUTH_GROUP_BASEDN']
@@ -139,23 +167,52 @@ def add_ovirt_user_to_ldap():
 
         if (add_group_msg == True):
 
-            # added user to database and send ecrypted password
-            encrypted_data = User.encrypt_username_password(user_data['username'], user_data['password'],user_auth_domain)
-            newClient.encrypted_ovirt_auth_hash = encrypted_data["ct_bytes"]
-            newClient.encrypted_ovirt_auth_iv =  encrypted_data["iv"]
+            try:
+                # added user to database and send ecrypted password
+                encrypted_data = User.encrypt_username_password(user_data['username'], user_data['password'],user_auth_domain)
+                newClient.encrypted_ovirt_auth_hash = encrypted_data["ct_bytes"]
+                newClient.encrypted_ovirt_auth_iv =  encrypted_data["iv"]
 
-            # get ovirt userid
-            newClient.ovirt_user_id = OvirtEngineService().getUserDetailsByUsername(
-                user_data['username'],user_auth_domain
-            ).id
+                # get ovirt userid by logging in
+                OvirtEngineService.loginCreatedUser(newClient.username
+                                                    , user_data['password']
+                                                    , newClient.ovirt_auth_domain
+                                                )
+                found_user = None
+                user_search = OvirtEngineService().getUserDetailsByName(user_data['firstname'])
+                for auser in user_search:
+                    if auser.user_name == f"{newClient.username}@{newClient.ovirt_auth_domain}":
+                        found_user = auser
 
-            db.session.add(newClient)
-            db.session.commit()
-            result = json.dumps({
-                'java_ciphertext': urlsafe_b64encode(
-                    encrypted_data["iv"] + encrypted_data["ct_bytes"] + "|" + user_auth_domain
-                ).decode('utf-8')
-            })
+                if found_user:
+                    newClient.ovirt_user_id = found_user.id
+                else:
+                    raise RuntimeError(f"Could not find user {user_data['firstname']}@{newClient.ovirt_auth_domain} in Ovirt Service")
+
+                db.session.commit()
+
+                result = json.dumps({
+                    'java_ciphertext': urlsafe_b64encode(
+                        encrypted_data["iv"] + encrypted_data["ct_bytes"]
+                    ).decode('utf-8')
+                    , "auth_domain": user_auth_domain
+                })
+            except Exception as ex:
+                # rollback adding the user to LDAP
+                LdapUser.set_basedn(
+                    application.config['LDAP_AUTH_BASEDN']
+                ).query.filter(f"(uid={user_data['username']})").first().delete()
+
+                LdapGroup.remove_user(
+                    user_data['username']
+                    , group_name
+                    , application.config['LDAP_AUTH_GROUP_BASEDN']
+                )
+
+                OvirtEngineService().deleteUserAccount(found_user.id)
+
+                # re-throw the exception.
+                raise ex
 
             return result , 201
         else:
@@ -169,10 +226,13 @@ def add_ovirt_user_to_ldap():
 
 @application.route('/user/delete/<uidBase64Hash>')
 @basic_auth.login_required
-def delete_ovirt_user_from_ldap(uidBase64Hash):
+def delete_user_from_services(uidBase64Hash):
     ldap_userid, billing_id = urlsafe_b64decode(uidBase64Hash).decode('utf-8').split("|")
     # get User from database
-    aclient = User.query.filter_by(billing_id= billing_id).first()
+    aclient = db.session.query(User).filter_by(billing_id=billing_id).first()
+
+    if not aclient:
+        raise RuntimeError(f"User '{ldap_userid}' not found in database")
 
     # delete from LDAP
     ldap_user = LdapUser.set_basedn(
@@ -185,26 +245,18 @@ def delete_ovirt_user_from_ldap(uidBase64Hash):
     del_user_msg = ldap_user.delete()
 
     if (del_user_msg == True):
-
         # delete user from group ldap
-        add_group_msg = application.extensions['ldap'].connection.modify_s(
-            f"cn={aclient.ldap_group_name},{application.config['LDAP_AUTH_GROUP_BASEDN']}"
-            , [(ldap.MOD_DELETE, 'memberUid', [ aclient.username.encode()])])
-
-        # remove user from the group.
-        #user_group = LdapGroup.set_basedn(
-        #    application.config['LDAP_AUTH_GROUP_BASEDN']
-        #).query.filter(f"(cn={aclient.ldap_group_name})").first()
-        #new_group_members = [amember for amember in user_group.members if amember != aclient.username]
-        #user_group.members = new_group_members
-        #user_group.save()
+        add_group_msg =  LdapGroup.remove_user(
+            aclient.username
+            , aclient.ldap_group_name
+            , application.config['LDAP_AUTH_GROUP_BASEDN']
+        )
 
         # delete from ovirt server
         OvirtEngineService().deleteUserAccount(aclient.ovirt_user_id)
-        aclient.acive = False
 
         # set user as inactive
-        db.session.add(aclient)
+        aclient.active = False
         db.session.commit()
 
         res = jsonify({"status":"success", "message":"User deleted"})
@@ -281,4 +333,7 @@ def create_admin_api_user():
     db.session.commit()
 
 if __name__ == '__main__':
+    gunicorn_logger = logging.getLogger("gunicorn.error")
+    application.logger.handlers = gunicorn_logger.handlers
+    application.logger.setLevel(gunicorn_logger.level)
     application.run()

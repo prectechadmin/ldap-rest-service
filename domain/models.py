@@ -46,6 +46,8 @@ class User(db.Model):
     billing_id = db.Column(db.Integer, unique=True, nullable=False)
     billing_product_id = db.Column(db.Integer, unique=False, nullable=False)
     username = db.Column(db.String(80), unique=False, nullable=False)
+    first_name = db.Column(db.String(80), unique=False, nullable=False)
+    last_name = db.Column(db.String(80), unique=False, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     ldap_group_name = db.Column(db.String(120), unique=False, nullable=False)
     ovirt_user_id = db.Column(db.String(150), unique=False, nullable=False)
