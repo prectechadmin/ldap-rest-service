@@ -5,3 +5,4 @@
 /ldap_test.py
 /.idea
 /docker-run.sh
+/config.py
