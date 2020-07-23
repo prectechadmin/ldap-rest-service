@@ -11,6 +11,7 @@ class OvirtEngineService:
             url=current_app.config["OVIRT_ENGINE_URL"],
             username=f"{username}@{domain}",
             password=password,
+            insecure=True, # No host name TLS verification. Doesn't work in Openshift
             ca_file=current_app.config["OVIRT_CERT_PATH"],
             debug=current_app.config["DEBUG"],
             log=logging.getLogger("OvirtService"),
@@ -41,6 +42,7 @@ class OvirtEngineService:
             url=current_app.config["OVIRT_ENGINE_URL"],
             username=f"{self.username}@{self.domain}",
             password=self.password,
+            insecure=True,  # No host name TLS verification. Doesn't work in Openshift
             ca_file=current_app.config["OVIRT_CERT_PATH"],
             debug=current_app.config["DEBUG"],
             log=logging.getLogger("OvirtService"),

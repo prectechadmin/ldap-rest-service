@@ -1,25 +1,24 @@
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
-import sys,traceback,json
+import json
 from datetime import datetime
 import logging
-from flask_python_ldap import LDAP
+from lib.ldap import cLDAP
 from base64 import urlsafe_b64decode
 from service.ldap_service import LdapUser, LdapGroup
 from service.ovirt_service import OvirtEngineService
-from config import ProductionConfig, DevelopmentConfig
+from config import ProductionConfig
 from base64 import urlsafe_b64encode
-from flask_httpauth import HTTPBasicAuth, HTTPTokenAuth, MultiAuth
+from flask_httpauth import HTTPBasicAuth
 
 basic_auth = HTTPBasicAuth()
-#token_auth = HTTPTokenAuth('Bearer')
-#multi_auth = MultiAuth(basic_auth, token_auth)
 
 application = Flask(__name__)
 application.config.from_object(ProductionConfig())
 
 # enable LDAP service
-LDAP(application)
+cLDAP(application)
+
 # enable database plugin
 db = SQLAlchemy(application)
 
@@ -169,7 +168,7 @@ def add_user_to_services():
 
             try:
                 # added user to database and send ecrypted password
-                encrypted_data = User.encrypt_username_password(user_data['username'], user_data['password'],user_auth_domain)
+                encrypted_data = User.encrypt_username_password(user_data['username'], user_data['password'])
                 newClient.encrypted_ovirt_auth_hash = encrypted_data["ct_bytes"]
                 newClient.encrypted_ovirt_auth_iv =  encrypted_data["iv"]
 
@@ -189,6 +188,7 @@ def add_user_to_services():
                 else:
                     raise RuntimeError(f"Could not find user {user_data['firstname']}@{newClient.ovirt_auth_domain} in Ovirt Service")
 
+                application.logger.debug(newClient.dump_object())
                 db.session.commit()
 
                 result = json.dumps({
@@ -257,6 +257,7 @@ def delete_user_from_services(uidBase64Hash):
 
         # set user as inactive
         aclient.active = False
+        application.logger.debug(aclient.dump_object())
         db.session.commit()
 
         res = jsonify({"status":"success", "message":"User deleted"})
@@ -307,21 +308,15 @@ def delete_group_from_ldap(uidBase64Hash):
 def handle_exceptions(e):
     res = jsonify({"status":"Error","message":f"Request failed with exception: {str(e)}"})
     res.headers['content-type'] = "application/json"
-    print('-' * 60)
-    traceback.print_exc(file=sys.stdout)
-    print('-' * 60)
+    application.logger.exception(e)
     return res, 500
 
 @basic_auth.error_handler
 def unauthorised_user_basic_auth():
     return unauthorised_user()
 
-#@token_auth.error_handler
-#def unauthorised_user_token_auth():
-#    return unauthorised_user()
-
 def unauthorised_user():
-    failed_response = jsonify({"status": "error", "message": "Your are not authorised to use this services."})
+    failed_response = jsonify({"status": "error", "message": "Your are not authorised to use these services."})
     failed_response.status_code = 401
     failed_response.headers['content-type'] = "application/json"
     return failed_response

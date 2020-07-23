@@ -5,7 +5,7 @@ class Config(object):
     TESTING = False
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    LDAP_URI = os.environ.get('LDAP_URI',"")
+    LDAP_URI = f"ldaps://{os.environ.get('LDAP_HOST','')}"
     LDAP_BINDDN = os.environ.get('LDAP_BINDDN',"") # the manger
     LDAP_SECRET = os.environ.get('LDAP_SECRET',"")
     LDAP_AUTH_BASEDN = os.environ.get('LDAP_AUTH_BASEDN',"") # The authenication root DN
