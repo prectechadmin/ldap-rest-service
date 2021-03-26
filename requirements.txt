@@ -19,7 +19,7 @@ pycryptodome==3.9.7
 pycurl==7.43.0.4
 PyMySQL==0.9.3
 python-ldap==3.2.0
-PyYAML==5.3.1
+PyYAML==5.4
 requests==2.23.0
 shellescape==3.8.1
 six==1.14.0
